@@ -1,7 +1,7 @@
 import torch
 from torch.distributions.multivariate_normal import MultivariateNormal
 
-from Extended_sysmdl import SystemModel
+from .Extended_sysmdl import SystemModel
 from Controllers.PID import PIDController
 from typing import List
 
@@ -9,7 +9,8 @@ class ControlSystemModel(SystemModel):
     def __init__(self, f, Q, h, R, T, T_test, m, n, p, pid_params, dt, prior_Q=None, prior_Sigma=None, prior_S=None):
         super().__init__(f, Q, h, R, T, T_test, m, n, prior_Q, prior_Sigma, prior_S)
         self.p = p      # Dimension of control signal
-        self.pid_controller = PIDController(*pid_params, torch.zeros(1, n,1), dt)
+        self.pid_params = pid_params
+        self.dt = dt
 
     def InitSequence(self, m1x_0, m2x_0):
         return super().InitSequence(m1x_0, m2x_0)
@@ -21,6 +22,8 @@ class ControlSystemModel(SystemModel):
         return super().UpdateCovariance_Matrix(Q, R)
     
     def GenerateSequence(self, Q_gen, R_gen, T):
+        # Init PID controller
+        self.pid_controller = PIDController(*self.pid_params, torch.zeros(1, self.n,1), self.dt)
         # Pre allocate an array for current state
         self.x = torch.zeros(size=[self.m, T])
         # Pre allocate an array for current observation
@@ -87,6 +90,8 @@ class ControlSystemModel(SystemModel):
     ### Generate Batch ###
     ######################
     def GenerateBatch(self, args, size, T, randomInit=False):
+        # Init PID controller
+        self.pid_controller = PIDController(*self.pid_params, torch.zeros(size, self.n,1), self.dt)
         if(randomInit):
             # Allocate Empty Array for Random Initial Conditions
             self.m1x_0_rand = torch.zeros(size, self.m, 1)
@@ -113,8 +118,8 @@ class ControlSystemModel(SystemModel):
         if(args.randomLength):
             # Allocate Array for Input and Target (use zero padding)
             self.Input = torch.zeros(size, self.n, args.T_max)
-            self.States = torch.zeros(size, self.n, args.T_max)
-            self.Target = torch.zeros(size, self.m, args.T_max)
+            self.States = torch.zeros(size, self.m, args.T_max)
+            self.Target = torch.zeros(size, self.p, args.T_max)
             self.lengthMask = torch.zeros((size,args.T_max), dtype=torch.bool)# init with all false
             # Init Sequence Lengths
             T_tensor = torch.round((args.T_max-args.T_min)*torch.rand(size)).int()+args.T_min # Uniform distribution [100,1000]
@@ -134,9 +139,9 @@ class ControlSystemModel(SystemModel):
             # Allocate Empty Array for Input
             self.Input = torch.empty(size, self.n, T)
             # Allocate Empty Array for States
-            self.States = torch.empty(size, self.n, T)
+            self.States = torch.empty(size, self.m, T)
             # Allocate Empty Array for Target
-            self.Target = torch.empty(size, self.m, T)
+            self.Target = torch.empty(size, self.p, T)
 
             # Set x0 to be x previous
             self.x_prev = self.m1x_0_batch
@@ -192,13 +197,11 @@ class ControlSystemModel(SystemModel):
                 ### Squeeze to Array ###
                 ########################
                 # Save current Control signal to Trajectory Array
-                self.Target[:, :, t] = torch.squeeze(ut)
-
+                self.Target[:, :, t] = torch.squeeze(ut,2)
                 # Save Current State to Trajectory Array
-                self.States[:, :, t] = torch.squeeze(xt)
-
+                self.States[:, :, t] = torch.squeeze(xt,2)
                 # Save Current Observation to Trajectory Array
-                self.Input[:, :, t] = torch.squeeze(yt)
+                self.Input[:, :, t] = torch.squeeze(yt,2)
 
                 ################################
                 ### Save Current to Previous ###
