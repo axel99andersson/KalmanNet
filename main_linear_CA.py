@@ -10,7 +10,7 @@ from Simulations.Linear_CA.parameters import F_gen,F_CV,H_identity,H_onlyPos,\
 
 from Filters.KalmanFilter_test import KFTest
 
-from KNet.KalmanNet_nn import KalmanNetNN
+from Networks.KalmanNet_nn import KalmanNetNN
 
 from Pipelines.Pipeline_EKF import Pipeline_EKF as Pipeline
 

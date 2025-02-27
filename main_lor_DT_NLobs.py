@@ -11,7 +11,7 @@ f, h, h_nonlinear, Q_structure, R_structure
 
 from Pipelines.Pipeline_EKF import Pipeline_EKF
 
-from KNet.KalmanNet_nn import KalmanNetNN
+from Networks.KalmanNet_nn import KalmanNetNN
 
 print("Pipeline Start")
 ################

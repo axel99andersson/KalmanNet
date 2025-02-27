@@ -11,7 +11,7 @@ from Pipelines.Pipeline_EKF import Pipeline_EKF
 
 from datetime import datetime
 
-from KNet.KalmanNet_nn import KalmanNetNN
+from Networks.KalmanNet_nn import KalmanNetNN
 
 from Simulations.Lorenz_Atractor.parameters import m1x_0, m2x_0, m, n,\
 f, h, hRotate, H_Rotate, H_Rotate_inv, Q_structure, R_structure
@@ -38,7 +38,7 @@ args.N_T = 200
 args.T = 100
 args.T_test = 100
 ### training parameters
-args.use_cuda = True # use GPU or not
+args.use_cuda = False # use GPU or not
 args.n_steps = 2000
 args.n_batch = 30
 args.lr = 1e-3

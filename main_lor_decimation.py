@@ -11,7 +11,7 @@ from Simulations.Lorenz_Atractor.parameters import m1x_0, m2x_0, m, n,delta_t_ge
 f, h, h_nobatch, fInacc, Q_structure, R_structure
 
 from Pipelines.Pipeline_EKF import Pipeline_EKF
-from KNet.KalmanNet_nn import KalmanNetNN
+from Networks.KalmanNet_nn import KalmanNetNN
 
 from Plot import Plot_extended as Plot
 
