@@ -77,7 +77,7 @@ class ControlSystemModel(SystemModel):
                 yt = torch.add(yt,er)
             
             # Compute control input using PID
-            ut = self.pid_controller.compute_control(yt)
+            ut: torch.Tensor = self.pid_controller.compute_control(yt)
             
             # Save data
             self.x[:, t] = xt.squeeze()

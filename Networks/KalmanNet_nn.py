@@ -20,7 +20,10 @@ class KalmanNetNN(torch.nn.Module):
         else:
             self.device = torch.device('cpu')
 
-        self.InitSystemDynamics(SysModel.f, SysModel.h, SysModel.m, SysModel.n)
+        try:
+            self.InitSystemDynamics(SysModel.f, SysModel.h, SysModel.m, SysModel.n, SysModel.p)
+        except:
+            self.InitSystemDynamics(SysModel.f, SysModel.h, SysModel.m, SysModel.n)
 
         # Number of neurons in the 1st hidden layer
         #H1_KNet = (SysModel.m + SysModel.n) * (10) * 8
@@ -113,7 +116,7 @@ class KalmanNetNN(torch.nn.Module):
     ##################################
     ### Initialize System Dynamics ###
     ##################################
-    def InitSystemDynamics(self, f, h, m, n):
+    def InitSystemDynamics(self, f, h, m, n, p=None):
         
         # Set State Evolution Function
         self.f = f
@@ -122,6 +125,13 @@ class KalmanNetNN(torch.nn.Module):
         # Set Observation Function
         self.h = h
         self.n = n
+
+        # For Controlled Environments
+        if p is not None:
+            self.p = p
+            self.controlled = True
+        else:
+            self.controlled = False
 
     ###########################
     ### Initialize Sequence ###
@@ -136,14 +146,19 @@ class KalmanNetNN(torch.nn.Module):
         self.m1x_posterior_previous = self.m1x_posterior
         self.m1x_prior_previous = self.m1x_posterior
         self.y_previous = self.h(self.m1x_posterior)
+        self.control_signal = torch.zeros_like(self.y_previous)
 
     ######################
     ### Compute Priors ###
     ######################
     def step_prior(self):
+        
         # Predict the 1-st moment of x
-        self.m1x_prior = self.f(self.m1x_posterior)
-
+        if not self.controlled:
+            self.m1x_prior = self.f(self.m1x_posterior)
+        else:
+            self.m1x_prior = self.f(self.m1x_posterior, self.control_signal)
+        
         # Predict the 1-st moment of y
         self.m1y = self.h(self.m1x_prior)
 

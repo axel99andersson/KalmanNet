@@ -14,7 +14,7 @@ class RecoveryController(nn.Module):
 
     def forward(self, x):
         x = self.lstm1(x)
-        x = self.fc(x)
+        x = self.fc(x[:,-1,:])
         if self.clip_output:
             x = torch.min(x, torch.ones_like(x)*self.clip_max_value)
             x = torch.max(x, torch.ones_like(x)*self.clip_min_value)

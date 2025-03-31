@@ -8,10 +8,13 @@ from Simulations.utils import DataGen,Short_Traj_Split
 import Simulations.config as config
 
 from Pipelines.Pipeline_EKF import Pipeline_EKF
+from Pipelines.Pipeline_Recovery import Pipeline_Recovery_Controller
 
 from datetime import datetime
 
 from Networks.KalmanNet_nn import KalmanNetNN
+from Networks.RecoveryController import RecoveryController
+from Networks.RecoveryNetwork import RecoveryNetwork
 
 from Simulations.Hillclimbing_Car.parameters import m1x_0, m2x_0, m, n, p, pid_params, dt, \
     f, h, Q_structure, R_structure
@@ -140,12 +143,21 @@ print("testset size:",test_target.size())
 print("KNet with full model info")
 KNet_model = KalmanNetNN()
 KNet_model.NNBuild(sys_model, args)
+controller = RecoveryController(
+   input_size = m,
+   hidden_size=100,
+   num_layers=1,
+   out_size=1,
+   clip_output=True
+)
+recovery_network = RecoveryNetwork(KNet_model, controller)
 # ## Train Neural Network
-KNet_Pipeline = Pipeline_EKF(strTime, "KNet", "KNet")
+KNet_Pipeline = Pipeline_Recovery_Controller(strTime, "KNet", "KNet")
 KNet_Pipeline.setssModel(sys_model)
-KNet_Pipeline.setModel(KNet_model)
+KNet_Pipeline.setModel(recovery_network)
 print("Number of trainable parameters for KNet:",sum(p.numel() for p in KNet_model.parameters() if p.requires_grad))
 KNet_Pipeline.setTrainingParams(args) 
+breakpoint()
 if(chop):
     [MSE_cv_linear_epoch, MSE_cv_dB_epoch, MSE_train_linear_epoch, MSE_train_dB_epoch] = KNet_Pipeline.NNTrain(sys_model, cv_input, cv_target, train_input, train_target, path_results,randomInit=True,train_init=train_init)
 else:
