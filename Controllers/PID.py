@@ -18,7 +18,7 @@ class PIDController:
         self.integral = torch.zeros_like(setpoint)
         self.prev_error = torch.zeros_like(setpoint)
     
-    def compute_control(self, measurement):
+    def compute_control(self, measurement, clip_value=True, clip_min_value=-1.0, clip_max_value=1.0):
         """
         Computes the control signal based on measurements (works for batched and multivariate measurements)
 
@@ -33,7 +33,12 @@ class PIDController:
         self.integral += error * self.dt
         derivative = (error - self.prev_error) / self.dt
         self.prev_error = error
-        return self.Kp * error + self.Ki * self.integral + self.Kd * derivative
+        unclipped_signal =  self.Kp * error + self.Ki * self.integral + self.Kd * derivative
+        if not clip_value:
+            return unclipped_signal
+        
+        return torch.clip(unclipped_signal, -1.0, 1.0)
+        
     
     def set_setpoint(self, new_setpoint: torch.Tensor):
         """

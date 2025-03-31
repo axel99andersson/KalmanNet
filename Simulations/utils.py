@@ -12,6 +12,7 @@ def DataGen(args, SysModel_data, fileName):
     SysModel_data.GenerateBatch(args, args.N_E, args.T, randomInit=args.randomInit_train)
     train_input = SysModel_data.Input
     train_target = SysModel_data.Target
+    train_setpoints = SysModel_data.Setpoint
     ### init conditions ###
     train_init = SysModel_data.m1x_0_batch #size: N_E x m x 1
     ### length mask ###
@@ -24,6 +25,7 @@ def DataGen(args, SysModel_data, fileName):
     SysModel_data.GenerateBatch(args, args.N_CV, args.T, randomInit=args.randomInit_cv)
     cv_input = SysModel_data.Input
     cv_target = SysModel_data.Target
+    cv_setpoints = SysModel_data.Setpoint
     cv_init = SysModel_data.m1x_0_batch #size: N_CV x m x 1
     ### length mask ###
     if args.randomLength:
@@ -35,6 +37,7 @@ def DataGen(args, SysModel_data, fileName):
     SysModel_data.GenerateBatch(args, args.N_T, args.T_test, randomInit=args.randomInit_test)
     test_input = SysModel_data.Input
     test_target = SysModel_data.Target
+    test_setpoints = SysModel_data.Setpoint
     test_init = SysModel_data.m1x_0_batch #size: N_T x m x 1
     ### length mask ###
     if args.randomLength:
@@ -44,10 +47,11 @@ def DataGen(args, SysModel_data, fileName):
     ### Save Data ###
     #################
     if(args.randomLength):
-        torch.save([train_input, train_target, cv_input, cv_target, test_input, test_target,train_init, cv_init, test_init, train_lengthMask,cv_lengthMask,test_lengthMask], fileName)
+        torch.save([train_input, train_target, train_setpoints, cv_input, cv_target, cv_setpoints, test_input, test_target, test_setpoints, train_init, cv_init, test_init, train_lengthMask, cv_lengthMask,test_lengthMask], fileName)
     else:
-        torch.save([train_input, train_target, cv_input, cv_target, test_input, test_target,train_init, cv_init, test_init], fileName)
-    
+        torch.save([train_input, train_target, train_setpoints, cv_input, cv_target, cv_setpoints, test_input, test_target, test_setpoints, train_init, cv_init, test_init], fileName)
+
+
 def DecimateData(all_tensors, t_gen,t_mod, offset=0):
     
     # ratio: defines the relation between the sampling time of the true process and of the model (has to be an integer)

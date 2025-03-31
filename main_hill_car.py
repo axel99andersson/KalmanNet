@@ -17,7 +17,7 @@ from Networks.RecoveryController import RecoveryController
 from Networks.RecoveryNetwork import RecoveryNetwork
 
 from Simulations.Hillclimbing_Car.parameters import m1x_0, m2x_0, m, n, p, pid_params, dt, \
-    f, h, Q_structure, R_structure
+    f, h, Q_structure, R_structure, init_setpoint, setpoint_change
 
 # from Simulations.Lorenz_Atractor.parameters import m1x_0, m2x_0, m, n,\
 # f, h, hRotate, H_Rotate, H_Rotate_inv, Q_structure, R_structure
@@ -62,7 +62,7 @@ else:
 
 offset = 0 # offset for the data
 chop = False # whether to chop data sequences into shorter sequences
-path_results = 'KNet/'
+path_results = 'ModelWeights/'
 DatafolderName = 'Simulations/Hillclimbing_Car/data' + '/'
 switch = 'partial' # 'full' or 'partial' or 'estH'
    
@@ -85,14 +85,16 @@ dataFileName = ['data_hillcar_rq1030_T100.pt']
 ###  Generate and load data DT case   ###
 #########################################
 
-sys_model = ControlSystemModel(f, Q, h, R, args.T, args.T_test, m, n, p, pid_params, dt)# parameters for GT
+sys_model = ControlSystemModel(f, Q, h, R, args.T, args.T_test, m, n, p, pid_params, dt, init_setpoint, setpoint_change)# parameters for GT
 sys_model.InitSequence(m1x_0, m2x_0)# x0 and P0
 
 print("Start Data Gen")
 DataGen(args, sys_model, DatafolderName + dataFileName[0])
 print("Data Load")
 print(dataFileName[0])
-[train_input_long,train_target_long, cv_input, cv_target, test_input, test_target,_,_,_] =  torch.load(DatafolderName + dataFileName[0], map_location=device)  
+[train_input_long, train_target_long, train_setpoint_long, 
+ cv_input, cv_target, cv_setpoint, 
+ test_input, test_target, test_setpoint,_,_,_] =  torch.load(DatafolderName + dataFileName[0], map_location=device)  
 if chop: 
    print("chop training data")    
    [train_target, train_input, train_init] = Short_Traj_Split(train_target_long, train_input_long, args.T)
@@ -157,13 +159,13 @@ KNet_Pipeline.setssModel(sys_model)
 KNet_Pipeline.setModel(recovery_network)
 print("Number of trainable parameters for KNet:",sum(p.numel() for p in KNet_model.parameters() if p.requires_grad))
 KNet_Pipeline.setTrainingParams(args) 
-breakpoint()
+
 if(chop):
-    [MSE_cv_linear_epoch, MSE_cv_dB_epoch, MSE_train_linear_epoch, MSE_train_dB_epoch] = KNet_Pipeline.NNTrain(sys_model, cv_input, cv_target, train_input, train_target, path_results,randomInit=True,train_init=train_init)
+    [MSE_cv_linear_epoch, MSE_cv_dB_epoch, MSE_train_linear_epoch, MSE_train_dB_epoch, min_value_train, max_value_train] = KNet_Pipeline.NNTrain(sys_model, cv_input, cv_target, train_input, train_target, path_results,randomInit=True,train_init=train_init)
 else:
-    [MSE_cv_linear_epoch, MSE_cv_dB_epoch, MSE_train_linear_epoch, MSE_train_dB_epoch] = KNet_Pipeline.NNTrain(sys_model, cv_input, cv_target, train_input, train_target, path_results)
+    [MSE_cv_linear_epoch, MSE_cv_dB_epoch, MSE_train_linear_epoch, MSE_train_dB_epoch, min_value_train, max_value_train] = KNet_Pipeline.NNTrain(sys_model, cv_input, cv_target, train_input, train_target, path_results)
 ## Test Neural Network
-[MSE_test_linear_arr, MSE_test_linear_avg, MSE_test_dB_avg,Knet_out,RunTime] = KNet_Pipeline.NNTest(sys_model, test_input, test_target, path_results)
+[MSE_test_linear_arr, MSE_test_linear_avg, MSE_test_dB_avg,Knet_out,RunTime] = KNet_Pipeline.NNTest(sys_model, test_input, test_target, path_results, min_value_train, max_value_train)
 
 ####################################################################################
 print("Pipeline Done.")

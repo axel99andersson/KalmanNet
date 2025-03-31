@@ -49,12 +49,20 @@ class Pipeline_Recovery_Controller:
         # optimizer which Tensors it should update.
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learningRate, weight_decay=self.weightDecay)
 
+    def stanardizeDataset(self, dataset: torch.Tensor):
+        # Standardize the dataset so that all entries lie between 0 and 1
+        standardized = (dataset - torch.min(dataset)) / (torch.max(dataset) - torch.min(dataset))
+        return standardized, torch.min(dataset), torch.max(dataset)
+
     def NNTrain(self, SysModel, cv_input, cv_target, train_input, train_target, path_results, \
         MaskOnState=False, randomInit=False,cv_init=None,train_init=None,\
         train_lengthMask=None,cv_lengthMask=None):
 
         self.N_E = len(train_input)
         self.N_CV = len(cv_input)
+
+        train_input, min_train, max_train = self.stanardizeDataset(train_input)
+        cv_input = (cv_input - min_train) / (max_train - min_train)
 
         self.MSE_cv_linear_epoch = torch.zeros([self.N_steps])
         self.MSE_cv_dB_epoch = torch.zeros([self.N_steps])
@@ -82,13 +90,14 @@ class Pipeline_Recovery_Controller:
             self.optimizer.zero_grad()
             # Training Mode
             self.model.train()
-            self.model.batch_size = self.N_B
+            self.model.set_batchsize(self.N_B)
             # Init Hidden State
             self.model.init_hidden_KNet()
             # Init Training Batch tensors
             y_training_batch = torch.zeros([self.N_B, SysModel.n, SysModel.T]).to(self.device)
             train_target_batch = torch.zeros([self.N_B, SysModel.p, SysModel.T]).to(self.device)
             x_out_training_batch = torch.zeros([self.N_B, SysModel.m, SysModel.T]).to(self.device)
+            control_out_training_batch = torch.zeros([self.N_B, SysModel.p, SysModel.T]).to(self.device)
             if self.args.randomLength:
                 MSE_train_linear_LOSS = torch.zeros([self.N_B])
                 MSE_cv_linear_LOSS = torch.zeros([self.N_CV])
@@ -117,13 +126,15 @@ class Pipeline_Recovery_Controller:
             else:
                 self.model.InitSequence(\
                 SysModel.m1x_0.reshape(1,SysModel.m,1).repeat(self.N_B,1,1), SysModel.T)
-            
+
             # Forward Computation
             for t in range(0, SysModel.T):
-                x_out_training_batch[:, :, t] = torch.squeeze(self.model(torch.unsqueeze(y_training_batch[:, :, t],2)))
-            
+                # control_out_training_batch[:, :, t], x_out_training_batch[:, :, t] = torch.squeeze(self.model(torch.unsqueeze(y_training_batch[:, :, t],2)))
+                control, estimated_state = self.model(torch.unsqueeze(y_training_batch[:, :, t],2))
+                control_out_training_batch[:, :, t], x_out_training_batch[:, :, t] = control, torch.squeeze(estimated_state)
             # Compute Training Loss
             MSE_trainbatch_linear_LOSS = 0
+            
             if (self.args.CompositionLoss):
                 y_hat = torch.zeros([self.N_B, SysModel.n, SysModel.T])
                 for t in range(SysModel.T):
@@ -133,40 +144,40 @@ class Pipeline_Recovery_Controller:
                     if self.args.randomLength:
                         jj = 0
                         for index in n_e:# mask out the padded part when computing loss
-                            MSE_train_linear_LOSS[jj] = self.alpha * self.loss_fn(x_out_training_batch[jj,mask,train_lengthMask[index]], train_target_batch[jj,mask,train_lengthMask[index]])+(1-self.alpha)*self.loss_fn(y_hat[jj,mask,train_lengthMask[index]], y_training_batch[jj,mask,train_lengthMask[index]])
+                            MSE_train_linear_LOSS[jj] = self.alpha * self.loss_fn(control_out_training_batch[jj,mask,train_lengthMask[index]], train_target_batch[jj,mask,train_lengthMask[index]])+(1-self.alpha)*self.loss_fn(y_hat[jj,mask,train_lengthMask[index]], y_training_batch[jj,mask,train_lengthMask[index]])
                             jj += 1
                         MSE_trainbatch_linear_LOSS = torch.mean(MSE_train_linear_LOSS)
                     else:                     
-                        MSE_trainbatch_linear_LOSS = self.alpha * self.loss_fn(x_out_training_batch[:,mask,:], train_target_batch[:,mask,:])+(1-self.alpha)*self.loss_fn(y_hat[:,mask,:], y_training_batch[:,mask,:])
+                        MSE_trainbatch_linear_LOSS = self.alpha * self.loss_fn(control_out_training_batch[:,mask,:], train_target_batch[:,mask,:])+(1-self.alpha)*self.loss_fn(y_hat[:,mask,:], y_training_batch[:,mask,:])
                 else:# no mask on state
                     if self.args.randomLength:
                         jj = 0
                         for index in n_e:# mask out the padded part when computing loss
-                            MSE_train_linear_LOSS[jj] = self.alpha * self.loss_fn(x_out_training_batch[jj,:,train_lengthMask[index]], train_target_batch[jj,:,train_lengthMask[index]])+(1-self.alpha)*self.loss_fn(y_hat[jj,:,train_lengthMask[index]], y_training_batch[jj,:,train_lengthMask[index]])
+                            MSE_train_linear_LOSS[jj] = self.alpha * self.loss_fn(control_out_training_batch[jj,:,train_lengthMask[index]], train_target_batch[jj,:,train_lengthMask[index]])+(1-self.alpha)*self.loss_fn(y_hat[jj,:,train_lengthMask[index]], y_training_batch[jj,:,train_lengthMask[index]])
                             jj += 1
                         MSE_trainbatch_linear_LOSS = torch.mean(MSE_train_linear_LOSS)
                     else:                
-                        MSE_trainbatch_linear_LOSS = self.alpha * self.loss_fn(x_out_training_batch, train_target_batch)+(1-self.alpha)*self.loss_fn(y_hat, y_training_batch)
+                        MSE_trainbatch_linear_LOSS = self.alpha * self.loss_fn(control_out_training_batch, train_target_batch)+(1-self.alpha)*self.loss_fn(y_hat, y_training_batch)
             
             else:# no composition loss
                 if(MaskOnState):
                     if self.args.randomLength:
                         jj = 0
                         for index in n_e:# mask out the padded part when computing loss
-                            MSE_train_linear_LOSS[jj] = self.loss_fn(x_out_training_batch[jj,mask,train_lengthMask[index]], train_target_batch[jj,mask,train_lengthMask[index]])
+                            MSE_train_linear_LOSS[jj] = self.loss_fn(control_out_training_batch[jj,mask,train_lengthMask[index]], train_target_batch[jj,mask,train_lengthMask[index]])
                             jj += 1
                         MSE_trainbatch_linear_LOSS = torch.mean(MSE_train_linear_LOSS)
                     else:
-                        MSE_trainbatch_linear_LOSS = self.loss_fn(x_out_training_batch[:,mask,:], train_target_batch[:,mask,:])
+                        MSE_trainbatch_linear_LOSS = self.loss_fn(control_out_training_batch[:,mask,:], train_target_batch[:,mask,:])
                 else: # no mask on state
                     if self.args.randomLength:
                         jj = 0
                         for index in n_e:# mask out the padded part when computing loss
-                            MSE_train_linear_LOSS[jj] = self.loss_fn(x_out_training_batch[jj,:,train_lengthMask[index]], train_target_batch[jj,:,train_lengthMask[index]])
+                            MSE_train_linear_LOSS[jj] = self.loss_fn(control_out_training_batch[jj,:,train_lengthMask[index]], train_target_batch[jj,:,train_lengthMask[index]])
                             jj += 1
                         MSE_trainbatch_linear_LOSS = torch.mean(MSE_train_linear_LOSS)
                     else: 
-                        MSE_trainbatch_linear_LOSS = self.loss_fn(x_out_training_batch, train_target_batch)
+                        MSE_trainbatch_linear_LOSS = self.loss_fn(control_out_training_batch, train_target_batch)
 
             # dB Loss
             self.MSE_train_linear_epoch[ti] = MSE_trainbatch_linear_LOSS.item()
@@ -197,7 +208,7 @@ class Pipeline_Recovery_Controller:
 
             # Cross Validation Mode
             self.model.eval()
-            self.model.batch_size = self.N_CV
+            self.model.set_batchsize(self.N_CV)
             # Init Hidden State
             self.model.init_hidden_KNet()
             with torch.no_grad():
@@ -205,7 +216,8 @@ class Pipeline_Recovery_Controller:
                 SysModel.T_test = cv_input.size()[-1] # T_test is the maximum length of the CV sequences
 
                 x_out_cv_batch = torch.empty([self.N_CV, SysModel.m, SysModel.T_test]).to(self.device)
-                
+                control_out_cv_batch = torch.empty([self.N_CV, SysModel.p, SysModel.T_test]).to(self.device)
+
                 # Init Sequence
                 if(randomInit):
                     if(cv_init==None):
@@ -218,24 +230,25 @@ class Pipeline_Recovery_Controller:
                         SysModel.m1x_0.reshape(1,SysModel.m,1).repeat(self.N_CV,1,1), SysModel.T_test)
 
                 for t in range(0, SysModel.T_test):
-                    x_out_cv_batch[:, :, t] = torch.squeeze(self.model(torch.unsqueeze(cv_input[:, :, t],2)))
+                    cv_control, cv_estimated_state = self.model(torch.unsqueeze(cv_input[:, :, t],2))
+                    control_out_cv_batch[:, :, t], x_out_cv_batch[:, :, t] = cv_control, torch.squeeze(cv_estimated_state)
                 
                 # Compute CV Loss
                 MSE_cvbatch_linear_LOSS = 0
                 if(MaskOnState):
                     if self.args.randomLength:
                         for index in range(self.N_CV):
-                            MSE_cv_linear_LOSS[index] = self.loss_fn(x_out_cv_batch[index,mask,cv_lengthMask[index]], cv_target[index,mask,cv_lengthMask[index]])
+                            MSE_cv_linear_LOSS[index] = self.loss_fn(control_out_cv_batch[index,mask,cv_lengthMask[index]], cv_target[index,mask,cv_lengthMask[index]])
                         MSE_cvbatch_linear_LOSS = torch.mean(MSE_cv_linear_LOSS)
                     else:          
-                        MSE_cvbatch_linear_LOSS = self.loss_fn(x_out_cv_batch[:,mask,:], cv_target[:,mask,:])
+                        MSE_cvbatch_linear_LOSS = self.loss_fn(control_out_cv_batch[:,mask,:], cv_target[:,mask,:])
                 else:
                     if self.args.randomLength:
                         for index in range(self.N_CV):
-                            MSE_cv_linear_LOSS[index] = self.loss_fn(x_out_cv_batch[index,:,cv_lengthMask[index]], cv_target[index,:,cv_lengthMask[index]])
+                            MSE_cv_linear_LOSS[index] = self.loss_fn(control_out_cv_batch[index,:,cv_lengthMask[index]], cv_target[index,:,cv_lengthMask[index]])
                         MSE_cvbatch_linear_LOSS = torch.mean(MSE_cv_linear_LOSS)
                     else:
-                        MSE_cvbatch_linear_LOSS = self.loss_fn(x_out_cv_batch, cv_target)
+                        MSE_cvbatch_linear_LOSS = self.loss_fn(control_out_cv_batch, cv_target)
 
                 # dB Loss
                 self.MSE_cv_linear_epoch[ti] = MSE_cvbatch_linear_LOSS.item()
@@ -260,9 +273,9 @@ class Pipeline_Recovery_Controller:
 
             print("Optimal idx:", self.MSE_cv_idx_opt, "Optimal :", self.MSE_cv_dB_opt, "[dB]")
 
-        return [self.MSE_cv_linear_epoch, self.MSE_cv_dB_epoch, self.MSE_train_linear_epoch, self.MSE_train_dB_epoch]
+        return [self.MSE_cv_linear_epoch, self.MSE_cv_dB_epoch, self.MSE_train_linear_epoch, self.MSE_train_dB_epoch, min_train, max_train]
 
-    def NNTest(self, SysModel, test_input, test_target, path_results, MaskOnState=False,\
+    def NNTest(self, SysModel, test_input, test_target, path_results, min_dataset_value, max_dataset_value, MaskOnState=False,\
      randomInit=False,test_init=None,load_model=False,load_model_path=None,\
         test_lengthMask=None):
         # Load model
@@ -272,6 +285,8 @@ class Pipeline_Recovery_Controller:
             self.model = torch.load(path_results+'best-model.pt', map_location=self.device) 
 
         self.N_T = test_input.shape[0]
+        test_input = (test_input - min_dataset_value) / (max_dataset_value, min_dataset_value)
+
         SysModel.T_test = test_input.size()[-1]
         self.MSE_test_linear_arr = torch.zeros([self.N_T])
         x_out_test = torch.zeros([self.N_T, SysModel.m,SysModel.T_test]).to(self.device)
@@ -286,7 +301,7 @@ class Pipeline_Recovery_Controller:
 
         # Test mode
         self.model.eval()
-        self.model.batch_size = self.N_T
+        self.model.set_batchsize(self.N_T)
         # Init Hidden State
         self.model.init_hidden_KNet()
         torch.no_grad()

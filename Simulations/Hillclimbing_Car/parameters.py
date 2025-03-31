@@ -8,8 +8,14 @@ from torch import autograd
 m = 2
 n = 1
 
-m1x_0 = torch.ones(m, 1) 
-m2x_0 = 0 * 0 * torch.eye(m)
+# Initial states of system
+m1x_0 = torch.zeros(m, 1)
+m1x_0[1,:] = 17.0 
+m2x_0 = torch.eye(m)
+
+# Mission variables
+init_setpoint = 17.0
+setpoint_change = 5.0
 
 # Define physics
 dt = 0.1        # Time resolution
@@ -81,10 +87,17 @@ def f(x: torch.Tensor, u: torch.Tensor):
     return torch.add(x, torch.multiply(derivative, dt))
 
 ##################################################
-### Observation function h for Lorenz Atractor ###
+############ Observation function h ##############
 ##################################################
 def h(x: torch.Tensor):
     return x[:,1].unsqueeze(2)
+
+###############################################
+### process noise Q and observation noise R ###
+###############################################
+
+Q_structure = torch.eye(m)
+R_structure = torch.ones(n)
 
 if __name__ == "__main__":
     x = torch.rand(2,1)
@@ -93,10 +106,3 @@ if __name__ == "__main__":
     x1 = f(x,u)
     print(x1)
     print(x1.size())
-
-###############################################
-### process noise Q and observation noise R ###
-###############################################
-
-Q_structure = torch.eye(m)
-R_structure = torch.ones(n)

@@ -6,11 +6,13 @@ from Controllers.PID import PIDController
 from typing import List
 
 class ControlSystemModel(SystemModel):
-    def __init__(self, f, Q, h, R, T, T_test, m, n, p, pid_params, dt, prior_Q=None, prior_Sigma=None, prior_S=None):
+    def __init__(self, f, Q, h, R, T, T_test, m, n, p, pid_params, dt, init_setpoint, setpoint_change, prior_Q=None, prior_Sigma=None, prior_S=None):
         super().__init__(f, Q, h, R, T, T_test, m, n, prior_Q, prior_Sigma, prior_S)
         self.p = p      # Dimension of control signal
         self.pid_params = pid_params
         self.dt = dt
+        self.init_setpoint = init_setpoint
+        self.setpoint_change = setpoint_change
 
     def InitSequence(self, m1x_0, m2x_0):
         return super().InitSequence(m1x_0, m2x_0)
@@ -37,10 +39,11 @@ class ControlSystemModel(SystemModel):
         ut = torch.zeros(self.p, 1)
 
         # Randomized mission: setpoints change over time
-        setpoint = torch.zeros(self.p, 1)
+        setpoint = torch.ones(self.p, 1)*self.init_setpoint
+        setpoint = setpoint + torch.rand(self.p, 1)*(self.init_setpoint/4) - torch.ones(self.p, 1)*(self.init_setpoint/8)
         for t in range(T):
             if t % (T // 4) == 0:  # Change setpoints at intervals
-                setpoint = torch.rand(self.p, 1) * 2 - 1  # New target in [-1,1]
+                setpoint = setpoint + torch.rand(self.p, 1)*self.setpoint_change - torch.ones(self.p, 1)*(self.setpoint_change/2)  # New target in [-1,1]
                 self.pid_controller.set_setpoint(setpoint)
             
             # State evolution
@@ -120,6 +123,7 @@ class ControlSystemModel(SystemModel):
             self.Input = torch.zeros(size, self.n, args.T_max)
             self.States = torch.zeros(size, self.m, args.T_max)
             self.Target = torch.zeros(size, self.p, args.T_max)
+            self.Setpoint = torch.zeros(size, self.p, args.T_max)
             self.lengthMask = torch.zeros((size,args.T_max), dtype=torch.bool)# init with all false
             # Init Sequence Lengths
             T_tensor = torch.round((args.T_max-args.T_min)*torch.rand(size)).int()+args.T_min # Uniform distribution [100,1000]
@@ -142,21 +146,26 @@ class ControlSystemModel(SystemModel):
             self.States = torch.empty(size, self.m, T)
             # Allocate Empty Array for Target
             self.Target = torch.empty(size, self.p, T)
-
+            # Allocate Empty Array for Setpoint
+            self.Setpoint = torch.empty(size, self.p, T)
             # Set x0 to be x previous
             self.x_prev = self.m1x_0_batch
             xt = self.x_prev
             ut = torch.zeros(size, self.p, 1)
+            setpoint = torch.ones(size, self.p, 1)*self.init_setpoint
+            setpoint = setpoint +  torch.rand(size, self.p, 1)*(self.init_setpoint/4) - torch.ones(size, self.p, 1)*(self.init_setpoint/8)
             # Generate in a batched manner
             for t in range(0, T):
                 ########################
                 #### New Setpoint ######
                 if t % (T // 4) == 0:  # Change setpoints at intervals
-                    setpoint = torch.rand(size, self.p, 1) * 2 - 1  # New target in [-1,1]
+                    setpoint = setpoint + torch.rand(size, self.p, 1) * self.setpoint_change - torch.ones(size, self.p, 1)*(self.setpoint_change/2) # New target in [-1,1]
                     self.pid_controller.set_setpoint(setpoint)
                 ########################
                 #### State Evolution ###
-                ########################   
+                ########################
+
+                   
                 if torch.equal(self.Q,torch.zeros(self.m,self.m)):# No noise
                     xt = self.f(self.x_prev, ut)
                 elif self.m == 1: # 1 dim noise
@@ -202,6 +211,8 @@ class ControlSystemModel(SystemModel):
                 self.States[:, :, t] = torch.squeeze(xt,2)
                 # Save Current Observation to Trajectory Array
                 self.Input[:, :, t] = torch.squeeze(yt,2)
+                # Save Current Setpoint to Trajectory Array
+                self.Setpoint[:, :, t] = torch.squeeze(setpoint, 2)
 
                 ################################
                 ### Save Current to Previous ###
