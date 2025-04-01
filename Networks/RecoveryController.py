@@ -13,8 +13,10 @@ class RecoveryController(nn.Module):
         self.clip_max_value = clip_max_value
         self.batch_size = batch_size
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, y: torch.Tensor):
         x = x.reshape(self.batch_size, 1, -1)
+        y = y.reshape(self.batch_size, 1, -1)
+        x = torch.cat((x,y), dim=2)
         out, hidden = self.lstm1(x)
         x = self.fc(out[:,-1,:])
         if self.clip_output:

@@ -11,6 +11,7 @@ from Pipelines.Pipeline_EKF import Pipeline_EKF
 from Pipelines.Pipeline_Recovery import Pipeline_Recovery_Controller
 
 from datetime import datetime
+import sys
 
 from Networks.KalmanNet_nn import KalmanNetNN
 from Networks.RecoveryController import RecoveryController
@@ -18,9 +19,6 @@ from Networks.RecoveryNetwork import RecoveryNetwork
 
 from Simulations.Hillclimbing_Car.parameters import m1x_0, m2x_0, m, n, p, pid_params, dt, \
     f, h, Q_structure, R_structure, init_setpoint, setpoint_change
-
-# from Simulations.Lorenz_Atractor.parameters import m1x_0, m2x_0, m, n,\
-# f, h, hRotate, H_Rotate, H_Rotate_inv, Q_structure, R_structure
 
 print("Pipeline Start")
 ################
@@ -49,6 +47,7 @@ args.n_steps = 2000
 args.n_batch = 30
 args.lr = 1e-3
 args.wd = 1e-3
+run_control_system = True
 
 if args.use_cuda:
    if torch.cuda.is_available():
@@ -87,6 +86,18 @@ dataFileName = ['data_hillcar_rq1030_T100.pt']
 
 sys_model = ControlSystemModel(f, Q, h, R, args.T, args.T_test, m, n, p, pid_params, dt, init_setpoint, setpoint_change)# parameters for GT
 sys_model.InitSequence(m1x_0, m2x_0)# x0 and P0
+
+if run_control_system:
+    states, measurements, controls, setpoints = sys_model.GenerateSequenceRecovery(
+        Q_gen=Q,
+        R_gen=R,
+        T=args.T,
+        scaler_min=torch.tensor(7.5792),
+        scaler_max=torch.tensor(26.6838),
+        path_results=path_results,
+        device=torch.device('cpu')
+    )
+    sys.exit(0)
 
 print("Start Data Gen")
 DataGen(args, sys_model, DatafolderName + dataFileName[0])
@@ -146,7 +157,7 @@ print("KNet with full model info")
 KNet_model = KalmanNetNN()
 KNet_model.NNBuild(sys_model, args)
 controller = RecoveryController(
-   input_size = m,
+   input_size = m+1,                # Number of states + reference signal
    hidden_size=100,
    num_layers=1,
    out_size=1,
@@ -161,11 +172,11 @@ print("Number of trainable parameters for KNet:",sum(p.numel() for p in KNet_mod
 KNet_Pipeline.setTrainingParams(args) 
 
 if(chop):
-    [MSE_cv_linear_epoch, MSE_cv_dB_epoch, MSE_train_linear_epoch, MSE_train_dB_epoch, min_value_train, max_value_train] = KNet_Pipeline.NNTrain(sys_model, cv_input, cv_target, train_input, train_target, path_results,randomInit=True,train_init=train_init)
+    [MSE_cv_linear_epoch, MSE_cv_dB_epoch, MSE_train_linear_epoch, MSE_train_dB_epoch, min_value_train, max_value_train] = KNet_Pipeline.NNTrain(sys_model, cv_input, cv_target, cv_setpoint, train_input, train_target, train_setpoint_long, path_results,randomInit=True,train_init=train_init)
 else:
-    [MSE_cv_linear_epoch, MSE_cv_dB_epoch, MSE_train_linear_epoch, MSE_train_dB_epoch, min_value_train, max_value_train] = KNet_Pipeline.NNTrain(sys_model, cv_input, cv_target, train_input, train_target, path_results)
+    [MSE_cv_linear_epoch, MSE_cv_dB_epoch, MSE_train_linear_epoch, MSE_train_dB_epoch, min_value_train, max_value_train] = KNet_Pipeline.NNTrain(sys_model, cv_input, cv_target, cv_setpoint, train_input, train_target, train_setpoint_long, path_results)
 ## Test Neural Network
-[MSE_test_linear_arr, MSE_test_linear_avg, MSE_test_dB_avg,Knet_out,RunTime] = KNet_Pipeline.NNTest(sys_model, test_input, test_target, path_results, min_value_train, max_value_train)
+[MSE_test_linear_arr, MSE_test_linear_avg, MSE_test_dB_avg,Knet_out,RunTime] = KNet_Pipeline.NNTest(sys_model, test_input, test_target, test_setpoint, path_results, min_value_train, max_value_train)
 
 ####################################################################################
 print("Pipeline Done.")

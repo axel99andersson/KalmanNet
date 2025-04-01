@@ -73,16 +73,19 @@ def f(x: torch.Tensor, u: torch.Tensor):
     """
     # Compute the road slope
     theta = road_slope(x)
-    
+    if len(u.shape) == 2:
+        u = u.unsqueeze(0)
+    if len(x.shape) == 2:
+        x = x.unsqueeze(0)
     # Forces
-    F_engine = torch.multiply(u.squeeze(2), Fmax)                          # Engine force
-    F_gravity = mass*g*torch.sin(theta)                   # Gravity force along the slope
-    F_rolling = mass * g * Cr * torch.cos(theta)              # Rolling resistance
+    F_engine = torch.multiply(u.squeeze(2), Fmax)                          # Engine force    
+    F_gravity = mass*g*torch.sin(theta)                     # Gravity force along the slope
+    F_rolling = mass * g * Cr * torch.cos(theta)            # Rolling resistance
     F_drag = 0.5 * rho * Cd * A * torch.pow(x[:,1], 2) * torch.cos(theta)   # Aerodynamic drag
-    
     # Acceleration
     F_total = F_engine - (F_gravity + F_rolling + F_drag)
     a = F_total / mass  # Newton's second law
+    
     derivative = torch.stack((x[:,1], a), dim=1)
     return torch.add(x, torch.multiply(derivative, dt))
 
@@ -90,8 +93,9 @@ def f(x: torch.Tensor, u: torch.Tensor):
 ############ Observation function h ##############
 ##################################################
 def h(x: torch.Tensor):
-    return x[:,1].unsqueeze(2)
-
+    if len(x.shape) == 3:
+        return x[:,1].unsqueeze(2)
+    return x[1].unsqueeze(1)
 ###############################################
 ### process noise Q and observation noise R ###
 ###############################################

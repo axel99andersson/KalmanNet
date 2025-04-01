@@ -5,6 +5,7 @@ which is used to train and test KalmanNet.
 
 import torch
 import torch.nn as nn
+from torch.utils.tensorboard import SummaryWriter
 import random
 import time
 from Plot import Plot_extended
@@ -19,6 +20,7 @@ class Pipeline_Recovery_Controller:
         self.modelName = modelName
         self.modelFileName = self.folderName + "model_" + self.modelName + ".pt"
         self.PipelineName = self.folderName + "pipeline_" + self.modelName + ".pt"
+        self.writer = SummaryWriter(log_dir="tensorboard_logs")
 
     def save(self):
         torch.save(self, self.PipelineName)
@@ -54,7 +56,7 @@ class Pipeline_Recovery_Controller:
         standardized = (dataset - torch.min(dataset)) / (torch.max(dataset) - torch.min(dataset))
         return standardized, torch.min(dataset), torch.max(dataset)
 
-    def NNTrain(self, SysModel, cv_input, cv_target, train_input, train_target, path_results, \
+    def NNTrain(self, SysModel, cv_input, cv_target, cv_setpoint, train_input, train_target, train_setpoint, path_results, \
         MaskOnState=False, randomInit=False,cv_init=None,train_init=None,\
         train_lengthMask=None,cv_lengthMask=None):
 
@@ -98,6 +100,7 @@ class Pipeline_Recovery_Controller:
             train_target_batch = torch.zeros([self.N_B, SysModel.p, SysModel.T]).to(self.device)
             x_out_training_batch = torch.zeros([self.N_B, SysModel.m, SysModel.T]).to(self.device)
             control_out_training_batch = torch.zeros([self.N_B, SysModel.p, SysModel.T]).to(self.device)
+            setpoint_training_batch = torch.zeros([self.N_B, SysModel.p, SysModel.T]).to(self.device)
             if self.args.randomLength:
                 MSE_train_linear_LOSS = torch.zeros([self.N_B])
                 MSE_cv_linear_LOSS = torch.zeros([self.N_CV])
@@ -110,9 +113,11 @@ class Pipeline_Recovery_Controller:
                 if self.args.randomLength:
                     y_training_batch[ii,:,train_lengthMask[index,:]] = train_input[index,:,train_lengthMask[index,:]]
                     train_target_batch[ii,:,train_lengthMask[index,:]] = train_target[index,:,train_lengthMask[index,:]]
+                    setpoint_training_batch[ii,:,train_lengthMask[index,:]] = train_setpoint[index,:,train_lengthMask[index,:]]
                 else:
                     y_training_batch[ii,:,:] = train_input[index]
                     train_target_batch[ii,:,:] = train_target[index]
+                    setpoint_training_batch[ii,:,:] = train_setpoint[index]
                 ii += 1
             
             # Init Sequence
@@ -130,7 +135,8 @@ class Pipeline_Recovery_Controller:
             # Forward Computation
             for t in range(0, SysModel.T):
                 # control_out_training_batch[:, :, t], x_out_training_batch[:, :, t] = torch.squeeze(self.model(torch.unsqueeze(y_training_batch[:, :, t],2)))
-                control, estimated_state = self.model(torch.unsqueeze(y_training_batch[:, :, t],2))
+                control, estimated_state = self.model(torch.unsqueeze(y_training_batch[:, :, t],2),
+                                                      torch.unsqueeze(setpoint_training_batch[:,:,t],2))
                 control_out_training_batch[:, :, t], x_out_training_batch[:, :, t] = control, torch.squeeze(estimated_state)
             # Compute Training Loss
             MSE_trainbatch_linear_LOSS = 0
@@ -182,6 +188,8 @@ class Pipeline_Recovery_Controller:
             # dB Loss
             self.MSE_train_linear_epoch[ti] = MSE_trainbatch_linear_LOSS.item()
             self.MSE_train_dB_epoch[ti] = 10 * torch.log10(self.MSE_train_linear_epoch[ti])
+            self.writer.add_scalar('mse_train_linear', self.MSE_train_linear_epoch[ti], ti)
+            self.writer.add_scalar('mse_train_dB', self.MSE_train_dB_epoch[ti], ti)
 
             ##################
             ### Optimizing ###
@@ -230,7 +238,8 @@ class Pipeline_Recovery_Controller:
                         SysModel.m1x_0.reshape(1,SysModel.m,1).repeat(self.N_CV,1,1), SysModel.T_test)
 
                 for t in range(0, SysModel.T_test):
-                    cv_control, cv_estimated_state = self.model(torch.unsqueeze(cv_input[:, :, t],2))
+                    cv_control, cv_estimated_state = self.model(torch.unsqueeze(cv_input[:, :, t],2),
+                                                                torch.unsqueeze(cv_setpoint[:,:,t],2))
                     control_out_cv_batch[:, :, t], x_out_cv_batch[:, :, t] = cv_control, torch.squeeze(cv_estimated_state)
                 
                 # Compute CV Loss
@@ -253,7 +262,9 @@ class Pipeline_Recovery_Controller:
                 # dB Loss
                 self.MSE_cv_linear_epoch[ti] = MSE_cvbatch_linear_LOSS.item()
                 self.MSE_cv_dB_epoch[ti] = 10 * torch.log10(self.MSE_cv_linear_epoch[ti])
-                
+                self.writer.add_scalar('mse_cv_linear', self.MSE_cv_linear_epoch[ti], ti)
+                self.writer.add_scalar('mse_cv_dB', self.MSE_cv_dB_epoch[ti], ti)
+
                 if (self.MSE_cv_dB_epoch[ti] < self.MSE_cv_dB_opt):
                     self.MSE_cv_dB_opt = self.MSE_cv_dB_epoch[ti]
                     self.MSE_cv_idx_opt = ti
@@ -275,7 +286,7 @@ class Pipeline_Recovery_Controller:
 
         return [self.MSE_cv_linear_epoch, self.MSE_cv_dB_epoch, self.MSE_train_linear_epoch, self.MSE_train_dB_epoch, min_train, max_train]
 
-    def NNTest(self, SysModel, test_input, test_target, path_results, min_dataset_value, max_dataset_value, MaskOnState=False,\
+    def NNTest(self, SysModel, test_input, test_target, test_setpoint, path_results, min_dataset_value, max_dataset_value, MaskOnState=False,\
      randomInit=False,test_init=None,load_model=False,load_model_path=None,\
         test_lengthMask=None):
         # Load model
@@ -285,12 +296,12 @@ class Pipeline_Recovery_Controller:
             self.model = torch.load(path_results+'best-model.pt', map_location=self.device) 
 
         self.N_T = test_input.shape[0]
-        test_input = (test_input - min_dataset_value) / (max_dataset_value, min_dataset_value)
+        test_input = (test_input - min_dataset_value) / (max_dataset_value - min_dataset_value)
 
         SysModel.T_test = test_input.size()[-1]
         self.MSE_test_linear_arr = torch.zeros([self.N_T])
         x_out_test = torch.zeros([self.N_T, SysModel.m,SysModel.T_test]).to(self.device)
-
+        control_out_test = torch.empty([self.N_T, SysModel.p, SysModel.T_test]).to(self.device)
         if MaskOnState:
             mask = torch.tensor([True,False,False])
             if SysModel.m == 2: 
@@ -314,7 +325,9 @@ class Pipeline_Recovery_Controller:
             self.model.InitSequence(SysModel.m1x_0.reshape(1,SysModel.m,1).repeat(self.N_T,1,1), SysModel.T_test)         
         
         for t in range(0, SysModel.T_test):
-            x_out_test[:,:, t] = torch.squeeze(self.model(torch.unsqueeze(test_input[:,:, t],2)))
+            control_test, estimated_state_test = self.model(torch.unsqueeze(test_input[:, :, t],2),
+                                                                torch.unsqueeze(test_setpoint[:,:,t],2))
+            control_out_test[:,:,t], x_out_test[:,:,t] = control_test, torch.squeeze(estimated_state_test)
         
         end = time.time()
         t = end - start

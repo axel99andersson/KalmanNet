@@ -10,9 +10,9 @@ class RecoveryNetwork(nn.Module):
         self.kalman_net = kalman_net
         self.controller = controller
 
-    def forward(self, x):
-        x = self.kalman_net(x)
-        control_signal = self.controller(x)
+    def forward(self, measurement, ref):
+        x = self.kalman_net(measurement)
+        control_signal = self.controller(x, ref)
         return control_signal, x
     
     def init_hidden_KNet(self):

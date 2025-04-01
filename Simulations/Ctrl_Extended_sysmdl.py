@@ -3,6 +3,7 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 
 from .Extended_sysmdl import SystemModel
 from Controllers.PID import PIDController
+from Networks.RecoveryNetwork import RecoveryNetwork
 from typing import List
 
 class ControlSystemModel(SystemModel):
@@ -219,6 +220,147 @@ class ControlSystemModel(SystemModel):
                 ################################
                 self.x_prev = xt
     
+    def GenerateSequenceRecovery(self, Q_gen, R_gen, T, scaler_min, scaler_max, path_results, device='cpu', load_model=False, load_model_path=None):
+        # Init PID controller
+        self.pid_controller = PIDController(*self.pid_params, torch.zeros(1, self.n,1), self.dt)
+                # Load model
+        if load_model:
+            controller: RecoveryNetwork = torch.load(load_model_path, map_location=device) 
+        else:
+            controller: RecoveryNetwork = torch.load(path_results+'best-model.pt', map_location=device) 
+
+        controller.set_batchsize(1)
+        controller.InitSequence(self.m1x_0.unsqueeze(0), T)
+        controller.init_hidden_KNet()
+        # Pre allocate an array for current state
+        self.x = torch.zeros(size=[self.m, T])
+        # Pre allocate an array for current observation
+        self.y = torch.zeros(size=[self.n, T])
+        # Pre allocate an array for current control signal
+        self.u = torch.zeros(size=[self.p, T])
+        # Pre allocate an array for current setpoint
+        self.s = torch.zeros(size=[self.p, T]) 
+        # Set x0 to be x previous
+        self.x_prev = self.m1x_0.unsqueeze(0)
+        xt = self.x_prev
+        
+        ut = torch.zeros(1, self.p, 1)
+
+        # Randomized mission: setpoints change over time
+        setpoint = torch.ones(1, self.p, 1)*self.init_setpoint
+        setpoint = setpoint + torch.rand(1,self.p, 1)*(self.init_setpoint/4) - torch.ones(1,self.p, 1)*(self.init_setpoint/8)
+        for t in range(T):
+            if t % (T // 4) == 0:  # Change setpoints at intervals
+                setpoint = setpoint + torch.rand(1,self.p, 1)*self.setpoint_change - torch.ones(1,self.p, 1)*(self.setpoint_change/2)  # New target in [-1,1]
+                # self.pid_controller.set_setpoint(setpoint)
+            
+            # State evolution
+            if torch.equal(Q_gen, torch.zeros(self.m, self.m)):
+                xt = self.f(self.x_prev, ut)
+            elif self.m == 1: # 1 dim noise
+                xt = self.f(self.x_prev, ut)
+                eq = torch.normal(mean=0, std=Q_gen)
+                # Additive Process Noise
+                xt = torch.add(xt,eq)
+            else:
+                xt = self.f(self.x_prev, ut)
+                mean = torch.zeros([self.m])              
+                distrib = MultivariateNormal(loc=mean, covariance_matrix=Q_gen)
+                eq = distrib.rsample()
+                eq = torch.reshape(eq[:], xt.size())
+                # Additive Process Noise
+                xt = torch.add(xt,eq)
+            
+            # Observation with noise
+            yt = self.h(xt)
+            if torch.equal(R_gen, torch.zeros(self.n, self.n)):
+                yt = self.h(xt)
+            if self.n == 1: # 1 dim noise
+                er = torch.normal(mean=0, std=R_gen)
+                # Additive Observation Noise
+                yt = torch.add(yt,er)
+            else:
+                mean = torch.zeros([self.n])            
+                distrib = MultivariateNormal(loc=mean, covariance_matrix=R_gen)
+                er = distrib.rsample()
+                er = torch.reshape(er[:], yt.size())       
+                # Additive Observation Noise
+                yt = torch.add(yt,er)
+            
+            yt = (yt-scaler_min) / (scaler_max-scaler_min)
+            # Compute control input using PID
+            ut, estimated_state = controller(yt, setpoint)
+            
+            # Save data
+            self.x[:, t] = xt.squeeze()
+            self.y[:, t] = yt.squeeze()
+            self.u[:, t] = ut.squeeze()
+            self.s[:, t] = setpoint.squeeze()
+            self.x_prev = xt
+        
+        return self.x, self.y, self.u, self.s
 
 if __name__ == "__main__":
-    sys_model = ControlSystemModel()
+    import config
+    from Simulations.Hillclimbing_Car.parameters import m1x_0, m2x_0, m, n, p, pid_params, dt, \
+    f, h, Q_structure, R_structure, init_setpoint, setpoint_change
+    ###################
+    ###  Settings   ###
+    ###################
+    args = config.general_settings()
+    ### dataset parameters
+    args.N_E = 1000
+    args.N_CV = 100
+    args.N_T = 200
+    args.T = 100
+    args.T_test = 100
+    ### training parameters
+    args.use_cuda = False # use GPU or not
+    args.n_steps = 2000
+    args.n_batch = 30
+    args.lr = 1e-3
+    args.wd = 1e-3
+    run_control_system = False
+
+    if args.use_cuda:
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+            print("Using GPU")
+        else:
+            raise Exception("No GPU found, please set args.use_cuda = False")
+    else:
+        device = torch.device('cpu')
+        print("Using CPU")
+
+    offset = 0 # offset for the data
+    chop = False # whether to chop data sequences into shorter sequences
+    path_results = 'ModelWeights/'
+    DatafolderName = 'Simulations/Hillclimbing_Car/data' + '/'
+    switch = 'partial' # 'full' or 'partial' or 'estH'
+    
+    # noise q and r
+    r2 = torch.tensor([0.1]) # [100, 10, 1, 0.1, 0.01]
+    vdB = -20 # ratio v=q2/r2
+    v = 10**(vdB/10)
+    q2 = torch.mul(v,r2)
+
+    Q = q2[0] * Q_structure
+    R = r2[0] * R_structure
+
+    print("1/r2 [dB]: ", 10 * torch.log10(1/r2[0]))
+    print("1/q2 [dB]: ", 10 * torch.log10(1/q2[0]))
+
+    traj_resultName = ['traj_hillcar_rq1030_T100.pt']
+    dataFileName = ['data_hillcar_rq1030_T100.pt']
+    sys_model = ControlSystemModel(f, Q, h, R, args.T, args.T_test, m, n, p, pid_params, dt, init_setpoint, setpoint_change)# parameters for GT
+    sys_model.InitSequence(m1x_0, m2x_0)# x0 and P0
+
+    states, measurements, controls, setpoints = sys_model.GenerateSequenceRecovery(
+        Q_gen=Q,
+        R_gen=R,
+        T=args.T,
+        scaler_min=torch.tensor(7.5792),
+        scaler_max=torch.tensor(26.6838),
+        path_results=path_results,
+        device=torch.device('cpu')
+    )
